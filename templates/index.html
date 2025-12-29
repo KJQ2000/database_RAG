@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>💎 Jewelry Inventory Q&A</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+<div class="container py-5">
+    <h1 class="mb-4">💎 Jewelry Inventory Q&A</h1>
+
+    <!-- Question input -->
+    <div class="mb-3">
+        <label class="form-label">Ask a question about the jewelry inventory:</label>
+        <input type="text" id="question" class="form-control" placeholder="e.g. Show customers with pending bookings">
+    </div>
+
+    <!-- Generated SQL editor -->
+    <div class="mb-3">
+        <label class="form-label">Generated SQL:</label>
+        <textarea id="sqlEditor" class="form-control" rows="4"></textarea>
+        <button id="runSqlBtn" class="btn btn-secondary mt-2">Run SQL</button>
+    </div>
+
+    <!-- Execution time -->
+    <div class="mb-3">
+        <label class="form-label">Execution Time:</label>
+        <span id="execTime">-</span>
+    </div>
+
+    <!-- Search button -->
+    <button id="askBtn" class="btn btn-primary mb-4">Search</button>
+
+    <!-- Loading status -->
+    <div id="loadingContainer" class="mb-3 d-none">
+        <div class="progress">
+            <div id="loadingBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                role="progressbar" style="width: 0%">0%</div>
+        </div>
+        <small id="loadingStatus" class="text-muted"></small>
+    </div>
+
+    <div id="error" class="alert alert-danger d-none"></div>
+
+    <!-- Generated SQL display (optional, can remove if redundant with editable box) -->
+    <div class="card mb-3">
+        <div class="card-header">Generated SQL</div>
+        <div class="card-body">
+            <pre id="sqlQuery"></pre>
+        </div>
+    </div>
+
+    <!-- Data table -->
+    <div class="card mb-3">
+        <div class="card-header">Data</div>
+        <div class="card-body">
+            <table id="resultsTable" class="table table-striped">
+                <thead><tr id="tableHead"></tr></thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Final answer -->
+    <div class="card">
+        <div class="card-header">Answer</div>
+        <div class="card-body" id="finalAnswer"></div>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+body {
+    background-color: #f8f9fa;
+}
+
+pre {
+    background: #f1f3f4;
+    padding: 10px;
+    border-radius: 5px;
+    white-space: pre-wrap;
+    font-size: 0.9rem;
+}
+
+#finalAnswer {
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.alert {
+    font-size: 0.95rem;
+}
+
+#finalAnswer table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+#finalAnswer th, #finalAnswer td {
+    border: 1px solid #dee2e6;
+    padding: 0.5rem;
+}
+
+#finalAnswer th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+}
