@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 import os
 import pandas as pd
 
-from database import Database
+from src.shared.database import Database
 from rag_logic import generate_sql, answer_with_data, load_file, schema_str, dictionary_str
 
 load_dotenv()

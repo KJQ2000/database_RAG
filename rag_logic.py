@@ -7,7 +7,7 @@ from langchain.prompts.chat import (
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate
 )
-from constant import SCHEMA, DICT_DIR
+from src.shared.constant import SCHEMA, DICT_DIR
 
 load_dotenv()
 
