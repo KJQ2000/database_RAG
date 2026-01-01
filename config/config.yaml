@@ -3,7 +3,6 @@ intent_system_prompt: |
   
   Classify the user's question into exactly ONE of the following intents:
   
-  - general_knowledge
   - database_query
   - store_info
   - unclear
@@ -12,7 +11,6 @@ intent_system_prompt: |
     - If question asks for numbers, counts, sales, stock, transactions → database_query
     - If question asks about return, exchange, warranty, policy → store_policy
     - If question asks about the store background, history, brand → store_info
-    - If question is general world knowledge → general_knowledge
     - If unsure → unclear
   
   Respond with ONLY the intent label.
