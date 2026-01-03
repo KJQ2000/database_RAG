@@ -22,7 +22,7 @@ class Logger:
         "CRITICAL": Fore.MAGENTA
     }
 
-    def __new__(cls, log_name="app.log", log_dir="logs", level=logging.INFO):
+    def __new__(cls, log_name="app.log", log_dir="logs", level=logging.DEBUG):
         if cls._instance is None:
             cls._instance = super(Logger, cls).__new__(cls)
 

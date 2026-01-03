@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.schema import SystemMessage, HumanMessage
 
 from src.shared.logger import Logger

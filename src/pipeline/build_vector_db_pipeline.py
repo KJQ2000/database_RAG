@@ -5,6 +5,8 @@ import shutil
 import re
 import pandas as pd
 from typing import List, Dict, Optional
+import hashlib
+import json
 
 from langchain.schema import Document
 from langchain.embeddings import OpenAIEmbeddings
@@ -27,11 +29,7 @@ class BuildVectorDB:
     incremental evolution of knowledge bases.
     """
 
-    def __init__(
-        self,
-        persist_path: str,
-        embedding_model: str
-    ):
+    def __init__(self, persist_path: str, embedding_model: str, hash_store_filename: str, intent:str):
         """
         Initializes the vector database builder.
 
@@ -45,7 +43,11 @@ class BuildVectorDB:
         self.logger = Logger().get_logger()
         self.logger.info("Initializing BuildVectorDB...")
 
+        self.intent = intent
+        self.index_name = 'db_rag_index' if self.intent == 'database_query' else 'store_info_index'
         self.persist_path = persist_path
+        self.hash_store_filename = hash_store_filename
+        self.hash_store_path = os.path.join(self.persist_path,self.hash_store_filename)
         self.embedding_model_name = embedding_model
 
         self.api_key = os.getenv("OPENAI_API_KEY")
@@ -73,62 +75,73 @@ class BuildVectorDB:
 
     def load_knowledge_base(self, file_path: str) -> Dict[str, List]:
         """
-        Loads and normalizes a knowledge base file into texts and metadata.
+        Load a TXT knowledge base and normalize it into chunks for vector storage.
 
-        Supported formats:
-            - TXT (schema-style)
-            - CSV
-            - Excel
-            - JSON
-            - YAML
+        This loader supports:
+        - Database schema documentation
+        - Policies / articles / FAQs
+        - Mixed content TXT files
+
+        The function automatically detects content type and applies
+        appropriate parsing logic.
 
         Args:
-            file_path (str): Path to knowledge base file.
+            file_path (str): Path to the knowledge base TXT file.
 
         Returns:
-            dict:
-                {
-                    "texts": List[str],
-                    "metadatas": List[dict]
-                }
+            Dict[str, List]:
+            {
+                "texts": List[str],
+                "metadatas": List[dict]
+            }
+
+        Raises:
+            FileNotFoundError: If file does not exist.
+            RuntimeError: If parsing fails.
         """
-        self.logger.info(f"Loading knowledge base: {file_path}")
+
+        self.logger.info(f"Loading knowledge base from: {file_path}")
 
         if not os.path.exists(file_path):
             self.logger.error(f"Knowledge base file not found: {file_path}")
             raise FileNotFoundError(file_path)
 
-        ext = os.path.splitext(file_path)[1].lower()
+        if not file_path.lower().endswith(".txt"):
+            raise ValueError("Only TXT knowledge base files are supported.")
 
         try:
-            if ext == ".txt":
-                return self._load_txt_schema(file_path)
-            elif ext == ".csv":
-                return self._load_csv(file_path)
-            elif ext in [".xls", ".xlsx"]:
-                return self._load_excel(file_path)
-            elif ext == ".json":
-                return self._load_json(file_path)
-            elif ext in [".yml", ".yaml"]:
-                return self._load_yaml(file_path)
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw_text = f.read()
+
+            if not raw_text.strip():
+                self.logger.warning("Knowledge base file is empty.")
+                return {"texts": [], "metadatas": []}
+
+            # Decide parsing strategy
+            if self.intent == 'database_query':
+                self.logger.info("Detected schema-style knowledge base.")
+                return self._load_txt_schema(file_path, raw_text)
             else:
-                raise ValueError(f"Unsupported file type: {ext}")
+                self.logger.info("Detected article-style knowledge base.")
+                return self._load_txt_articles(file_path, raw_text)
+
         except Exception as e:
             self.logger.error("Failed to load knowledge base.", exc_info=True)
             raise RuntimeError("Knowledge base loading failed.") from e
-
-    def _load_txt_schema(self, file_path: str) -> Dict[str, List]:
+    
+    def _load_txt_schema(self, file_path: str, raw_text: str) -> Dict[str, List]:
         """
-        Parses schema-style TXT files (table + column descriptions).
+        Parse schema-style TXT files.
+
+        Each table definition becomes one vector chunk.
         """
-        self.logger.debug("Parsing TXT schema file.")
 
-        with open(file_path, "r", encoding="utf-8") as f:
-            raw = f.read()
+        self.logger.debug("Parsing schema-style TXT knowledge base.")
 
-        blocks = re.split(r"=+\n", raw)
+        blocks = re.split(r"\n={3,}\n", raw_text)
 
-        texts, metadatas = [], []
+        texts: List[str] = []
+        metadatas: List[dict] = []
 
         for block in blocks:
             block = block.strip()
@@ -137,6 +150,7 @@ class BuildVectorDB:
 
             table_match = re.search(r"Table:\s*(.+)", block, re.IGNORECASE)
             if not table_match:
+                self.logger.debug("Skipping block without table definition.")
                 continue
 
             table_name = (
@@ -149,6 +163,7 @@ class BuildVectorDB:
             texts.append(block)
             metadatas.append({
                 "type": "schema",
+                "entity": "table",
                 "table": table_name,
                 "source": "database",
                 "file": os.path.basename(file_path)
@@ -157,67 +172,81 @@ class BuildVectorDB:
         self.logger.info(f"Extracted {len(texts)} schema chunks.")
         return {"texts": texts, "metadatas": metadatas}
 
-    def _load_csv(self, file_path: str) -> Dict[str, List]:
-        df = pd.read_csv(file_path)
+    def _load_txt_articles(self, file_path: str, raw_text: str) -> Dict[str, List]:
+        """
+        Parse article-style TXT files.
 
-        texts, metadatas = [], []
-        for idx, row in df.iterrows():
-            texts.append(row.to_string())
-            metadatas.append({
-                "type": "table_row",
-                "row": idx,
-                "file": os.path.basename(file_path)
-            })
+        Supports:
+        - Headings
+        - Long paragraphs
+        - Policy documents
+        """
 
+        self.logger.debug("Parsing article-style TXT knowledge base.")
+
+        # Split by headings or blank-line sections
+        sections = re.split(r"\n#{1,3}\s+|\n\n+", raw_text)
+
+        texts: List[str] = []
+        metadatas: List[dict] = []
+
+        for idx, section in enumerate(sections):
+            section = section.strip()
+            if not section:
+                continue
+
+            # Chunk long articles safely
+            chunks = self._chunk_text(section, max_length=800)
+
+            for chunk_id, chunk in enumerate(chunks):
+                texts.append(chunk)
+                metadatas.append({
+                    "type": "article",
+                    "section_id": idx,
+                    "chunk_id": chunk_id,
+                    "source": "knowledge_base",
+                    "file": os.path.basename(file_path)
+                })
+
+        self.logger.info(f"Extracted {len(texts)} article chunks.")
         return {"texts": texts, "metadatas": metadatas}
+    
+    def _chunk_text(self, text: str, max_length: int = 800) -> List[str]:
+        """
+        Chunk text into smaller pieces without breaking sentences.
 
-    def _load_excel(self, file_path: str) -> Dict[str, List]:
-        df = pd.read_excel(file_path)
+        Args:
+            text (str): Input text.
+            max_length (int): Max characters per chunk.
 
-        texts, metadatas = [], []
-        for idx, row in df.iterrows():
-            texts.append(row.to_string())
-            metadatas.append({
-                "type": "table_row",
-                "row": idx,
-                "file": os.path.basename(file_path)
-            })
+        Returns:
+            List[str]: List of text chunks.
+        """
 
-        return {"texts": texts, "metadatas": metadatas}
+        if len(text) <= max_length:
+            return [text]
 
-    def _load_json(self, file_path: str) -> Dict[str, List]:
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        chunks = []
+        current = ""
 
-        return {
-            "texts": [json.dumps(data, ensure_ascii=False, indent=2)],
-            "metadatas": [{
-                "type": "json",
-                "file": os.path.basename(file_path)
-            }]
-        }
+        for sentence in sentences:
+            if len(current) + len(sentence) <= max_length:
+                current += " " + sentence
+            else:
+                chunks.append(current.strip())
+                current = sentence
 
-    def _load_yaml(self, file_path: str) -> Dict[str, List]:
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        if current.strip():
+            chunks.append(current.strip())
 
-        return {
-            "texts": [yaml.dump(data, allow_unicode=True)],
-            "metadatas": [{
-                "type": "yaml",
-                "file": os.path.basename(file_path)
-            }]
-        }
+        return chunks
 
     # ------------------------------------------------------------------
     # Document + Vector DB
     # ------------------------------------------------------------------
 
-    def build_documents(
-        self,
-        texts: List[str],
-        metadatas: Optional[List[Dict]] = None
-    ) -> List[Document]:
+    def build_documents(self, texts: List[str], metadatas: Optional[List[Dict]] = None) -> List[Document]:
         """
         Converts raw texts and metadata into LangChain Documents.
         """
@@ -236,11 +265,7 @@ class BuildVectorDB:
         self.logger.info(f"Built {len(documents)} documents.")
         return documents
 
-    def build_vector_database(
-        self,
-        documents: List[Document],
-        rebuild: bool = False
-    ) -> FAISS:
+    def build_vector_database(self, documents: List[Document], rebuild: bool = False) -> FAISS:
         """
         Builds and persists a FAISS vector database.
 
@@ -255,6 +280,7 @@ class BuildVectorDB:
             if rebuild and os.path.exists(self.persist_path):
                 self.logger.warning("Rebuilding vector database.")
                 shutil.rmtree(self.persist_path)
+                
 
             vectorstore = FAISS.from_documents(
                 documents=documents,
@@ -262,7 +288,7 @@ class BuildVectorDB:
             )
 
             os.makedirs(self.persist_path, exist_ok=True)
-            vectorstore.save_local(self.persist_path)
+            vectorstore.save_local(self.persist_path,index_name=self.index_name)
 
             self.logger.info("Vector database built and saved successfully.")
             return vectorstore
@@ -282,15 +308,11 @@ class BuildVectorDB:
         return FAISS.load_local(
             self.persist_path,
             self.embedding_model,
-            allow_dangerous_deserialization=True
+            allow_dangerous_deserialization=True,
+            index_name=self.index_name
         )
 
-    def retrieve(
-        self,
-        query: str,
-        k: int = 4,
-        with_score: bool = False
-    ):
+    def retrieve(self, query: str, k: int = 4,with_score: bool = False):
         """
         Retrieves relevant documents for a query.
 
@@ -311,13 +333,48 @@ class BuildVectorDB:
         except Exception as e:
             self.logger.error("Retrieval failed.", exc_info=True)
             return []
+    
+    def _compute_file_hash(self, file_path: str) -> str:
+        """
+        Computes SHA256 hash of a file.
+
+        Args:
+            file_path (str): Path to file.
+
+        Returns:
+            str: SHA256 hash.
+        """
+        sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+    
+    def _load_hash_store(self) -> dict:
+        """
+        Loads stored file hashes.
+
+        Returns:
+            dict: {file_path: hash}
+        """
+        if not os.path.exists(self.hash_store_path):
+            return {}
+
+        with open(self.hash_store_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+
+    def _save_hash_store(self, store: dict):
+        """
+        Saves file hashes to disk.
+        """
+        os.makedirs(os.path.dirname(self.hash_store_path), exist_ok=True)
+
+        with open(self.hash_store_path, "w", encoding="utf-8") as f:
+            json.dump(store, f, indent=2)
         
 
-    def build_from_knowledge_base(
-        self,
-        knowledge_file: str,
-        rebuild: bool = False
-    ):
+    def build_from_knowledge_base(self, knowledge_file: str, rebuild: bool = False):
         """
         Builds or updates the vector database from a knowledge base file.
 
@@ -342,13 +399,13 @@ class BuildVectorDB:
         )
 
         try:
-            # 1️⃣ Load knowledge base
+            # Load knowledge base
             kb = self.load_knowledge_base(knowledge_file)
             self.logger.info(
                 f"Loaded knowledge base with {len(kb['texts'])} chunks"
             )
 
-            # 2️⃣ Build LangChain Documents
+            # Build LangChain Documents
             documents = self.build_documents(
                 texts=kb["texts"],
                 metadatas=kb["metadatas"]
@@ -357,7 +414,7 @@ class BuildVectorDB:
                 f"Converted knowledge base into {len(documents)} documents"
             )
 
-            # 3️⃣ Build vector database
+            # Build vector database
             self.build_vector_database(
                 documents=documents,
                 rebuild=rebuild
@@ -371,3 +428,39 @@ class BuildVectorDB:
                 exc_info=True
             )
             raise RuntimeError("Vector DB build failed") from e
+        
+    def build_from_knowledge_base_if_changed(self, knowledge_file: str) -> bool:
+        """
+        Builds or updates the vector database ONLY if the knowledge base file changed.
+
+        Args:
+            knowledge_file (str): Path to knowledge base file.
+
+        Returns:
+            bool: True if rebuild occurred, False if skipped.
+        """
+        self.logger.info(f"Checking if vector DB rebuild is needed for: {knowledge_file}")
+
+        try:
+            current_hash = self._compute_file_hash(knowledge_file)
+            hash_store = self._load_hash_store()
+            old_hash = hash_store.get(knowledge_file)
+
+            if old_hash == current_hash:
+                self.logger.info("Knowledge base unchanged. Skipping vector DB rebuild.")
+                return False
+
+            self.logger.info("Knowledge base changed. Rebuilding vector DB...")
+
+            # Rebuild vector DB
+            self.build_from_knowledge_base(knowledge_file=knowledge_file,rebuild=True)
+
+            # Update hash store
+            hash_store[knowledge_file] = current_hash
+            self._save_hash_store(hash_store)
+
+            self.logger.info("Vector DB rebuilt and hash updated successfully")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed during conditional vector DB build: {e}",exc_info=True)
